@@ -219,8 +219,7 @@ function renderSet(){const op=[...document.querySelectorAll('#setBox details')].
    <div class="closedlist">${CFG.closedDates.length?[...CFG.closedDates].sort().map(d=>`<span>${dateLabel(d)} <button class="small danger" onclick="openDate('${d}')" style="padding:1px 7px">×</button></span>`).join(''):'<span class="muted">مفيش أيام مقفولة</span>'}</div></div></details>
    <details class="card"><summary>📥 استيراد حجوزات من جوجل شيت</summary><div style="margin-top:10px" id="impBody">
    <div class="notice">جوجل شيت ← File ← Share ← Publish to web ← اختاري الشيت واختاري CSV ← انسخي اللينك.
-   الأعمدة المطلوبة بالترتيب: الاسم، التليفون، العيادة (اكتبي طوخ أو بركة)، التاريخ (مثال 2026-10-05)، وعمود اختياري خامس اكتبي فيه "تم" لو الكشف خلص.
-   أول سطر (العناوين) هيتجاهل تلقائي.</div>
+   لازم يكون فيه صف عناوين في أول سطر (زي: الاسم، التليفون، العيادة، التاريخ)، وترتيب الأعمدة مش مهم — هتقدري تحددي كل عمود بيمثل إيه بعد القراءة.</div>
    <label>لينك الـ CSV</label><input id="impUrl" placeholder="https://docs.google.com/.../pub?output=csv">
    <button id="impFetch" class="sec">اقرأ البيانات</button>
    <div id="impPreview"></div>
@@ -247,19 +246,35 @@ function parseDateFlexible(t){t=(t||'').trim();
   let m=t.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/); if(m)return `${m[1]}-${m[2].padStart(2,'0')}-${m[3].padStart(2,'0')}`;
   m=t.match(/^(\d{1,2})[\/-](\d{1,2})[\/-](\d{4})$/); if(m)return `${m[3]}-${m[2].padStart(2,'0')}-${m[1].padStart(2,'0')}`;
   return null;}
-let IMPORT_ROWS=[];
+let IMPORT_ROWS=[],CSV_HEAD=[],CSV_DATA=[];
+function guessCol(head,kws){for(let i=0;i<head.length;i++){const h=head[i]||'';if(kws.some(k=>h.includes(k)))return i;}return 0;}
 async function fetchImportPreview(){
   const url=$('impUrl').value.trim(); if(!url)return;
   $('impPreview').innerHTML='<div class="muted">بتقرا البيانات...</div>';
   let text; try{text=await (await fetch(url)).text();}catch(e){$('impPreview').innerHTML='<div class="notice">فشل تحميل اللينك — تأكدي إنه لينك CSV عام (Publish to web)</div>';return;}
-  const rows=parseCSV(text).slice(1); // skip header
+  const rows=parseCSV(text); if(!rows.length){$('impPreview').innerHTML='<div class="notice">الشيت فاضي</div>';return;}
+  CSV_HEAD=rows[0]; CSV_DATA=rows.slice(1);
+  const colOpts=CSV_HEAD.map((h,i)=>[i,h||('عمود '+(i+1))]);
+  const guess={name:guessCol(CSV_HEAD,['اسم']),phone:guessCol(CSV_HEAD,['تليفون','رقم','موبايل']),
+    clinic:guessCol(CSV_HEAD,['عياد']),date:guessCol(CSV_HEAD,['تاريخ','ميعاد']),status:guessCol(CSV_HEAD,['حال','كشف','تم'])};
+  $('impPreview').innerHTML=`<div class="notice">حددي كل عمود بيمثل إيه (اتخمّنت تلقائي، غيّريها لو غلط):</div>
+   <div class="row"><div><label>عمود الاسم</label><select id="mapName">${opts(colOpts,guess.name)}</select></div>
+   <div><label>عمود التليفون</label><select id="mapPhone">${opts(colOpts,guess.phone)}</select></div></div>
+   <div class="row"><div><label>عمود العيادة</label><select id="mapClinic">${opts(colOpts,guess.clinic)}</select></div>
+   <div><label>عمود التاريخ</label><select id="mapDate">${opts(colOpts,guess.date)}</select></div></div>
+   <label>عمود "تم الكشف" (اختياري)</label><select id="mapStatus"><option value="-1">(مفيش عمود زي ده)</option>${opts(colOpts,guess.status)}</select>
+   <button id="mapGo" class="sec">معاينة الحجوزات</button><div id="impPreview2"></div>`;
+  $('mapGo').onclick=buildImportPreview;
+}
+function buildImportPreview(){
+  const iN=+$('mapName').value,iP=+$('mapPhone').value,iC=+$('mapClinic').value,iD=+$('mapDate').value,iS=+$('mapStatus').value;
   const ok=[],bad=[];
-  rows.forEach((r,i)=>{const [name,phone,clinicTxt,dateTxt,status]=r;
-    const clinicId=clinicFromText(clinicTxt),date=parseDateFlexible(dateTxt),ph=(phone||'').replace(/\D/g,'');
-    if(name&&ph.length>=10&&clinicId&&date) ok.push({name:name.trim(),phone:ph,clinicId,date,done:/تم|خلص|done/i.test(status||'')});
+  CSV_DATA.forEach((r,i)=>{if(r.every(c=>!c.trim()))return;
+    const name=r[iN],phone=(r[iP]||'').replace(/\D/g,''),clinicId=clinicFromText(r[iC]),date=parseDateFlexible(r[iD]),status=iS>=0?r[iS]:'';
+    if(name&&phone.length>=10&&clinicId&&date) ok.push({name:name.trim(),phone,clinicId,date,done:/تم|خلص|done/i.test(status||'')});
     else bad.push(i+2);});
   IMPORT_ROWS=ok;
-  $('impPreview').innerHTML=`<div class="notice">لقيت ${ok.length} حجز صالح للاستيراد${bad.length?` — تجاهلت ${bad.length} سطر فيه بيانات ناقصة أو غلط (أسطر: ${bad.join(', ')})`:''}</div>
+  $('impPreview2').innerHTML=`<div class="notice">لقيت ${ok.length} حجز صالح للاستيراد${bad.length?` — تجاهلت ${bad.length} سطر فيه بيانات ناقصة أو غلط (أسطر: ${bad.join(', ')})`:''}</div>
     ${ok.length?`<button id="impGo">استورد ${ok.length} حجز دلوقتي</button><div id="impProgress"></div>`:''}`;
   if(ok.length)$('impGo').onclick=runImport;
 }
