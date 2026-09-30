@@ -1,0 +1,279 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>حجز العيادات</title>
+<style>
+:root{--bg:#f6f3ee;--card:#fff;--ink:#26221c;--sub:#6b6355;--line:#e7e1d6;--accent:#a8763e;--accent2:#7d5b30;--danger:#b5482f;--ok:#3f7a4e}
+@media (prefers-color-scheme:dark){:root{--bg:#1c1a16;--card:#26231d;--ink:#eee7db;--sub:#a89c86;--line:#3a352c}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font-family:Tahoma,'Segoe UI',sans-serif;line-height:1.6}
+.wrap{max-width:640px;margin:0 auto;padding:14px 14px 40px}
+h1{font-size:19px;margin:6px 0 10px}
+.tabs{display:flex;gap:6px;background:var(--card);border:1px solid var(--line);border-radius:12px;padding:4px;position:sticky;top:0;z-index:5}
+.tab{flex:1;text-align:center;padding:9px 4px;border-radius:9px;font-size:13px;cursor:pointer;color:var(--sub)}
+.tab.active{background:var(--accent);color:#fff}
+.card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:14px;margin-top:12px}
+.card h3{font-size:14px;margin:0 0 8px}
+label{display:block;font-size:12px;color:var(--sub);margin-bottom:4px}
+input,select{width:100%;padding:10px;border:1px solid var(--line);border-radius:9px;background:transparent;color:var(--ink);font-size:14px;margin-bottom:10px}
+button,a.btn{background:var(--accent);color:#fff;border:none;padding:10px 14px;border-radius:9px;font-size:14px;cursor:pointer;display:inline-block;text-decoration:none;text-align:center}
+button:disabled{opacity:.5}
+.sec{background:transparent;color:var(--accent);border:1px solid var(--accent)}
+.danger{background:var(--danger)}.ok{background:var(--ok)}
+.small{padding:5px 9px;font-size:12px;border-radius:7px}
+.row{display:flex;gap:8px;flex-wrap:wrap}.row>*{flex:1;min-width:120px}
+.b-item{border:1px solid var(--line);border-radius:10px;padding:10px;margin-top:8px}
+.top{display:flex;justify-content:space-between;align-items:center}
+.num{background:var(--accent);color:#fff;border-radius:8px;padding:2px 9px;font-weight:bold;font-size:13px}
+.code,.muted{color:var(--sub);font-size:12px}
+.chk{display:flex;align-items:center;gap:5px;min-width:auto}.chk input{width:auto;margin:0}
+.result{background:var(--card);border:1px dashed var(--accent);border-radius:12px;padding:16px;text-align:center;margin-top:12px}
+.big{font-size:30px;font-weight:bold;color:var(--accent2)}
+.actions{display:flex;gap:6px;margin-top:8px;flex-wrap:wrap}
+.notice{font-size:13px;color:var(--sub);background:var(--line);border-radius:9px;padding:8px 10px;margin-top:10px}
+.closedlist span{display:inline-flex;align-items:center;gap:6px;background:var(--line);border-radius:20px;padding:3px 10px;font-size:12px;margin:3px 0 0 4px}
+summary{cursor:pointer;font-size:14px;font-weight:bold}
+.overlay{position:fixed;inset:0;background:rgba(0,0,0,.45);display:flex;align-items:center;justify-content:center;z-index:50;padding:16px}
+.modal{background:var(--card);border-radius:14px;padding:16px;max-width:420px;width:100%;max-height:80vh;overflow:auto}
+</style>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
+</head>
+<body>
+<div class="wrap">
+  <h1 id="title">🗓️ حجز العيادات</h1>
+  <div id="gate"></div>
+  <div id="app" style="display:none">
+    <div class="tabs" id="tabs"></div>
+    <div id="sec" class="view" style="display:none"><div id="nbBox"></div><div id="nbResult"></div><div id="vwBox"></div><div id="setBox"></div></div>
+    <div id="doc" class="view" style="display:none"></div>
+    <div id="book" class="view" style="display:none"><div id="bookForm"></div><div id="pbResult"></div></div>
+    <div id="track" class="view" style="display:none"></div>
+  </div>
+</div>
+<div id="modalOverlay" class="overlay" style="display:none" onclick="if(event.target===this)closeModal()"><div class="modal" id="modalBody"></div></div>
+
+<script>
+firebase.initializeApp({
+  apiKey:"AIzaSyCRbPO4OeAeeip1ioqK-kTAbS8_pizL8E4",
+  authDomain:"dr-mokhtar-clinic.firebaseapp.com",
+  projectId:"dr-mokhtar-clinic",
+  storageBucket:"dr-mokhtar-clinic.firebasestorage.app",
+  messagingSenderId:"891891623311",
+  appId:"1:891891623311:web:c7a94f009ab79ff5e197fa"
+});
+const db=firebase.firestore(), auth=firebase.auth();
+const ADMIN=location.search.includes('admin');
+const CLINICS={toukh:{name:"عيادة طوخ طنبشا"},baraka:{name:"عيادة بركة السبع"}};
+const DAYS=["الأحد","الاثنين","الثلاثاء","الأربعاء","الخميس","الجمعة","السبت"];
+const $=id=>document.getElementById(id);
+let CFG={clinicDays:{toukh:[0,4],baraka:[6,1,2,3]},closedDates:[]};
+let BK=[];
+const clinicPairs=()=>Object.entries(CLINICS).map(([i,c])=>[i,c.name]);
+const opts=(p,cur)=>p.map(([v,l])=>`<option value="${v}" ${v==cur?'selected':''}>${l}</option>`).join('');
+function keep(ids,fn){const v=ids.map(i=>$(i)?$(i).value:'');fn();ids.forEach((i,k)=>{if($(i)&&v[k])$(i).value=v[k];});}
+const fmt=d=>d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');
+const dateLabel=iso=>{const d=new Date(iso+"T00:00:00");return DAYS[d.getDay()]+" "+d.toLocaleDateString('ar-EG',{day:'numeric',month:'long'});};
+const isClosed=iso=>CFG.closedDates.includes(iso);
+function dates(cid,n,skipClosed){const days=CFG.clinicDays[cid]||[],out=[];let d=new Date();d.setHours(0,0,0,0);
+  for(let g=0;out.length<n&&g<400;g++,d.setDate(d.getDate()+1)){const f=fmt(d);if(days.includes(d.getDay())&&!(skipClosed&&isClosed(f)))out.push(f);}return out;}
+const normPhone=p=>{p=p.replace(/\D/g,'');if(p.startsWith('0'))p='2'+p;else if(!p.startsWith('20'))p='20'+p;return p;};
+const localPhone=p=>p.startsWith('20')?'0'+p.slice(2):p;
+const trackUrl=c=>location.origin+location.pathname.replace(/index\.html$/,'')+'?code='+c;
+const waLink=(p,t)=>'https://wa.me/'+normPhone(p)+'?text='+encodeURIComponent(t);
+const waText=b=>`تأكيد حجزك في ${CLINICS[b.clinicId].name}\nالاسم: ${b.name}\nكود الحجز: ${b.code}\nرقم الدور: ${b.queue}\nالتاريخ: ${dateLabel(b.date)}\nمتابعة حجزك: ${trackUrl(b.code)}`;
+const note=(id,t)=>{$(id).innerHTML=`<div class="notice">${t}</div>`;};
+function openModal(h){$('modalBody').innerHTML=h;$('modalOverlay').style.display='flex';}
+function closeModal(){$('modalOverlay').style.display='none';}
+window.closeModal=closeModal;
+window.copyPhone=(p,el)=>{const t=el.textContent;const ok=()=>{el.textContent='✅ اتنسخ';setTimeout(()=>el.textContent=t,1500);};
+  (navigator.clipboard?navigator.clipboard.writeText(p):Promise.reject()).then(ok).catch(()=>{const i=document.createElement('input');i.value=p;document.body.appendChild(i);i.select();document.execCommand('copy');i.remove();ok();});};
+
+// ---------- core: atomic booking ----------
+async function createBooking(clinicId,date,name,phone){
+  const ph=normPhone(phone),dRef=db.doc('days/'+clinicId+'_'+date),mRef=db.doc('meta/codes'),pRef=db.doc('phones/'+ph);
+  return db.runTransaction(async tx=>{
+    const [d,m,p]=await Promise.all([tx.get(dRef),tx.get(mRef),tx.get(pRef)]);
+    if(!m.exists) throw new Error('setup');
+    const code=m.data().next,q=d.exists?d.data().next:1,active=d.exists?d.data().active:[];
+    tx.set(mRef,{next:code+1});
+    tx.set(dRef,{next:q+1,active:[...active,q]});
+    tx.set(pRef,{codes:[...(p.exists?p.data().codes:[]),code]});
+    const b={code,queue:q,clinicId,date,name,phone:ph,done:false,at:Date.now()};
+    tx.set(db.doc('bookings/'+code),b);
+    tx.set(db.doc('track/'+code),{clinicId,date,queue:q,done:false});
+    return b;
+  });
+}
+
+// ---------- config (public read) ----------
+db.doc('config/main').onSnapshot(s=>{if(s.exists)CFG={...CFG,...s.data()};renderAll();},()=>{});
+const saveCfg=()=>db.doc('config/main').set({clinicDays:CFG.clinicDays,closedDates:CFG.closedDates});
+
+// ---------- tabs ----------
+const TABS=ADMIN?[['sec','لوحة السكرتيرة'],['doc','👨‍⚕️ الدكتور']]:[['book','احجز الآن'],['track','تتبع حجزي']];
+function showTab(id){document.querySelectorAll('.tab').forEach(t=>t.classList.toggle('active',t.dataset.tab===id));
+  document.querySelectorAll('.view').forEach(v=>v.style.display=v.id===id?'block':'none');}
+window.showTab=showTab;
+$('tabs').innerHTML=TABS.map(([id,l])=>`<div class="tab" data-tab="${id}" onclick="showTab('${id}')">${l}</div>`).join('');
+function renderAll(){ if(ADMIN){renderNb();renderVw();renderSet();renderDoc();} else {renderBook();} }
+
+// ================= PATIENT =================
+let pbClinic='toukh',pbDate=null;
+function renderBook(){ if(ADMIN)return; keep(['pbName','pbPhone'],()=>{
+  const ds=dates(pbClinic,10,true); if(!ds.includes(pbDate))pbDate=ds[0];
+  $('bookForm').innerHTML=`<div class="card">
+    <label>اختار العيادة</label><select id="pbClinicSel">${opts(clinicPairs(),pbClinic)}</select>
+    <label>اختار الميعاد</label><select id="pbDateSel">${opts(ds.map(d=>[d,dateLabel(d)]),pbDate)}</select>
+    <label>الاسم</label><input id="pbName">
+    <label>رقم التليفون</label><input id="pbPhone" type="tel" placeholder="01xxxxxxxxx">
+    <button id="pbSubmit">تأكيد الحجز</button></div>`;
+  $('pbClinicSel').onchange=e=>{pbClinic=e.target.value;pbDate=null;renderBook();};
+  $('pbDateSel').onchange=e=>{pbDate=e.target.value;};
+  $('pbSubmit').onclick=async()=>{
+    const name=$('pbName').value.trim(),phone=$('pbPhone').value.trim();
+    if(!name||phone.replace(/\D/g,'').length<10)return note('pbResult','اكتب الاسم ورقم تليفون صحيح');
+    if(!pbDate)return note('pbResult','مفيش مواعيد متاحة دلوقتي');
+    $('pbSubmit').disabled=true;
+    try{const b=await createBooking(pbClinic,pbDate,name,phone);
+      $('pbName').value='';$('pbPhone').value='';
+      $('pbResult').innerHTML=`<div class="result"><div class="muted">تم الحجز في ${CLINICS[b.clinicId].name}</div>
+        <div class="big">دورك رقم ${b.queue}</div><div>كود الحجز: <b>${b.code}</b></div><div class="muted">${dateLabel(b.date)}</div>
+        <div class="muted" style="margin-top:6px">احفظي الكود عشان تتابعي دورك</div>
+        <div class="actions" style="justify-content:center"><button onclick="goTrack(${b.code})">تابعي حجزك دلوقتي</button></div></div>`;
+    }catch(e){note('pbResult',e.message==='setup'?'النظام لسه متجهزش، كلموا العيادة':'حصلت مشكلة، جربي تاني');}
+    $('pbSubmit').disabled=false;};
+});}
+let lastQ='';
+async function findTrack(q){
+  const digits=q.replace(/\D/g,''); if(!digits)return [];
+  let codes=[];
+  if(digits.length<=6)codes=[+digits];
+  else{const p=await db.doc('phones/'+normPhone(digits)).get();if(p.exists)codes=p.data().codes.slice(-10);}
+  const today=fmt(new Date()),out=[];
+  for(const c of codes){const t=await db.doc('track/'+c).get();if(!t.exists)continue;const x=t.data();if(x.date<today)continue;
+    const d=await db.doc('days/'+x.clinicId+'_'+x.date).get();const act=d.exists?d.data().active:[];
+    out.push({code:c,...x,ahead:x.done?0:act.filter(n=>n<x.queue).length});}
+  return out;
+}
+async function doTrack(q){lastQ=q;const box=$('trkResult');let r;
+  try{r=await findTrack(q);}catch(e){return note('trkResult','حصلت مشكلة في الاتصال، جربي تاني');}
+  if(!r.length)return note('trkResult','مفيش حجز بالبيانات دي (أو الحجز ده انتهى)');
+  box.innerHTML=r.map(b=>b.done?`<div class="result"><div class="muted">${CLINICS[b.clinicId].name} — ${dateLabel(b.date)}</div><div class="big">✅ تم الكشف عليك</div><div class="muted">كود ${b.code}</div></div>`
+   :`<div class="result"><div class="muted">${CLINICS[b.clinicId].name} — ${dateLabel(b.date)}</div><div class="big">دورك رقم ${b.queue}</div><div class="muted">كود ${b.code}</div>
+     <div style="margin-top:6px">${b.ahead===0?'<b>إنت التالي 🎉</b>':`قدامك: <b>${b.ahead}</b> ${b.ahead===1?'شخص':'أشخاص'}`}</div>
+     <div class="muted">بيتحدث تلقائي كل شوية</div></div>`).join('');}
+function renderTrack(){ if(ADMIN)return;
+  $('track').innerHTML=`<div class="card"><label>ادخل رقم تليفونك أو كود الحجز</label>
+    <input id="trkInput" placeholder="مثال: 150 أو رقم التليفون"><button id="trkBtn">بحث</button></div><div id="trkResult"></div>`;
+  $('trkBtn').onclick=()=>doTrack($('trkInput').value);}
+window.goTrack=c=>{showTab('track');$('trkInput').value=c;doTrack(String(c));};
+setInterval(()=>{if(lastQ&&!ADMIN&&$('track').style.display==='block')doTrack(lastQ);},15000);
+
+// ================= STAFF =================
+let nbClinic='toukh',nbDate=null,vwClinic='toukh',vwDate=null,drClinic='toukh',drDate=null;
+function renderNb(){ keep(['nbName','nbPhone'],()=>{
+  const ds=dates(nbClinic,14,true);if(!ds.includes(nbDate))nbDate=ds[0];
+  $('nbBox').innerHTML=`<div class="card"><h3>➕ حجز جديد (حد بيتصل يحجز)</h3>
+    <div class="row"><div><label>العيادة</label><select id="nbClinicSel">${opts(clinicPairs(),nbClinic)}</select></div>
+    <div><label>الميعاد</label><select id="nbDateSel">${opts(ds.map(d=>[d,dateLabel(d)]),nbDate)}</select></div></div>
+    <div class="row"><div><label>الاسم</label><input id="nbName"></div><div><label>رقم التليفون</label><input id="nbPhone" type="tel" placeholder="01xxxxxxxxx"></div></div>
+    <button id="nbAdd">تأكيد الحجز</button></div>`;
+  $('nbClinicSel').onchange=e=>{nbClinic=e.target.value;nbDate=null;renderNb();};
+  $('nbDateSel').onchange=e=>{nbDate=e.target.value;};
+  $('nbAdd').onclick=async()=>{const name=$('nbName').value.trim(),phone=$('nbPhone').value.trim();
+    if(!name||phone.replace(/\D/g,'').length<10)return note('nbResult','اكتب الاسم ورقم تليفون صحيح');
+    $('nbAdd').disabled=true;
+    try{const b=await createBooking(nbClinic,nbDate,name,phone);$('nbName').value='';$('nbPhone').value='';$('nbName').focus();
+      $('nbResult').innerHTML=`<div class="result"><div class="muted">اتحجز في ${CLINICS[b.clinicId].name} — ${dateLabel(b.date)}</div><div class="big">رقم ${b.queue}</div><div>كود: <b>${b.code}</b></div>
+        <div class="actions" style="justify-content:center"><a class="btn small ok" href="${waLink(b.phone,waText(b))}" target="_blank">واتساب</a></div></div>`;
+    }catch(e){note('nbResult',e.message==='setup'?'لسه بيتجهز، حدّثي الصفحة':'حصلت مشكلة، جربي تاني');}
+    $('nbAdd').disabled=false;};
+});}
+function item(b){const lp=localPhone(b.phone);return `<div class="b-item" style="${b.done?'opacity:.55':''}">
+  <div class="top"><div><span class="num">${b.queue}</span> <span class="code">كود ${b.code}</span></div>${b.done?'':`<button class="small" onclick="editBooking(${b.code})">تعديل</button>`}</div>
+  <div style="margin-top:6px${b.done?';text-decoration:line-through':''}">${b.name} — ${lp}</div>
+  <div class="actions"><a class="btn small sec" href="tel:${lp}">📞 اتصل الآن</a><button class="small sec" onclick="copyPhone('${lp}',this)">📋 نسخ الرقم</button>
+  ${b.done?`<button class="small sec" onclick="toggleDone(${b.code})">↩️ رجوع للدور</button>`
+  :`<button class="small ok" onclick="toggleDone(${b.code})">✅ خلص الكشف</button><a class="btn small ok" href="${waLink(b.phone,waText(b))}" target="_blank">واتساب</a>
+  <button class="small sec" onclick="rebook(${b.code})">حجز معاد متابعة</button><button class="small danger" onclick="deleteBooking(${b.code})">حذف</button>`}</div></div>`;}
+function dayLists(cid,d){const all=BK.filter(b=>b.clinicId===cid&&b.date===d).sort((a,b)=>a.queue-b.queue);return [all.filter(b=>!b.done),all.filter(b=>b.done)];}
+function renderVw(){const ds=dates(vwClinic,10,false);if(!ds.includes(vwDate))vwDate=ds[0];const [a,dn]=dayLists(vwClinic,vwDate);
+  $('vwBox').innerHTML=`<div class="card"><h3>👀 حجوزات يوم معين</h3>
+   <div class="row"><div><label>العيادة</label><select id="vwC">${opts(clinicPairs(),vwClinic)}</select></div>
+   <div><label>اليوم</label><select id="vwD">${opts(ds.map(d=>[d,dateLabel(d)+(isClosed(d)?' (مقفول)':'')]),vwDate)}</select></div></div>
+   <div class="muted" style="margin:6px 0">لسه في الدور: ${a.length} — اتكشفوا: ${dn.length}</div>
+   ${a.length?a.map(item).join(''):'<div class="muted">لسه مفيش حد في الدور</div>'}
+   ${dn.length?`<details style="margin-top:10px"><summary class="muted">✅ اللي اتكشفوا (${dn.length})</summary>${dn.map(item).join('')}</details>`:''}</div>`;
+  $('vwC').onchange=e=>{vwClinic=e.target.value;vwDate=null;renderVw();};$('vwD').onchange=e=>{vwDate=e.target.value;renderVw();};}
+function renderSet(){const op=[...document.querySelectorAll('#setBox details')].map(d=>d.open);
+  $('setBox').innerHTML=`<details class="card"><summary>📅 أيام كل عيادة (إعدادات)</summary><div style="margin-top:10px">
+   ${Object.keys(CLINICS).map(c=>`<div style="margin-bottom:8px"><b>${CLINICS[c].name}</b><div class="row" style="margin-top:6px">
+   ${DAYS.map((n,i)=>`<label class="chk"><input type="checkbox" data-c="${c}" data-d="${i}" ${(CFG.clinicDays[c]||[]).includes(i)?'checked':''}>${n.replace('ال','')}</label>`).join('')}</div></div>`).join('')}
+   <div class="notice">تغيير الأيام بيظهر للمرضى فورًا</div></div></details>
+   <details class="card"><summary>✈️ أيام مقفولة (سفر)</summary><div style="margin-top:10px">
+   <div class="row"><div><label>اختار يوم تقفله</label><input id="cd" type="date"></div><div style="align-self:flex-end"><button id="cdBtn" class="sec">قفل اليوم ده</button></div></div>
+   <div class="closedlist">${CFG.closedDates.length?[...CFG.closedDates].sort().map(d=>`<span>${dateLabel(d)} <button class="small danger" onclick="openDate('${d}')" style="padding:1px 7px">×</button></span>`).join(''):'<span class="muted">مفيش أيام مقفولة</span>'}</div></div></details>`;
+  document.querySelectorAll('#setBox details').forEach((d,i)=>d.open=!!op[i]);
+  document.querySelectorAll('#setBox input[type=checkbox]').forEach(cb=>cb.onchange=()=>{const c=cb.dataset.c,d=+cb.dataset.d;let a=CFG.clinicDays[c]||[];
+    CFG.clinicDays[c]=cb.checked?[...new Set([...a,d])]:a.filter(x=>x!==d);saveCfg();});
+  $('cdBtn').onclick=()=>{const v=$('cd').value;if(!v)return;if(!CFG.closedDates.includes(v))CFG.closedDates=[...CFG.closedDates,v];saveCfg();};}
+window.openDate=d=>{CFG.closedDates=CFG.closedDates.filter(x=>x!==d);saveCfg();};
+function renderDoc(){const ds=dates(drClinic,10,false);if(!ds.includes(drDate))drDate=ds[0];const [a,dn]=dayLists(drClinic,drDate);
+  $('doc').innerHTML=`<div class="card"><div class="row"><div><label>العيادة</label><select id="drC">${opts(clinicPairs(),drClinic)}</select></div>
+   <div><label>اليوم</label><select id="drD">${opts(ds.map(d=>[d,dateLabel(d)+(isClosed(d)?' (مقفول)':'')]),drDate)}</select></div></div>
+   <div class="muted" style="margin:6px 0">لسه في الدور: ${a.length} — اتكشفوا: ${dn.length}</div>
+   ${a.length?a.map(b=>`<div class="b-item"><div class="top"><div><span class="num">${b.queue}</span> ${b.name}</div><button class="small ok" onclick="toggleDone(${b.code})">✅ دخل</button></div></div>`).join(''):'<div class="muted">لسه مفيش حد في الدور</div>'}
+   ${dn.length?`<details style="margin-top:10px"><summary class="muted">✅ اتكشفوا (${dn.length})</summary>${dn.map(b=>`<div class="b-item" style="opacity:.55"><span class="num">${b.queue}</span> ${b.name}</div>`).join('')}</details>`:''}</div>`;
+  $('drC').onchange=e=>{drClinic=e.target.value;drDate=null;renderDoc();};$('drD').onchange=e=>{drDate=e.target.value;renderDoc();};}
+
+window.toggleDone=async code=>{const b=BK.find(x=>x.code===code);if(!b)return;const nd=!b.done,dRef=db.doc('days/'+b.clinicId+'_'+b.date);
+  await db.runTransaction(async tx=>{const d=await tx.get(dRef);let a=d.exists?d.data().active:[];
+    a=nd?a.filter(x=>x!==b.queue):[...new Set([...a,b.queue])].sort((x,y)=>x-y);
+    tx.update(dRef,{active:a});tx.update(db.doc('bookings/'+code),{done:nd});tx.update(db.doc('track/'+code),{done:nd});});};
+window.deleteBooking=code=>openModal(`<div>متأكدة إنك عايزة تحذفي الحجز ده؟</div><div class="actions" style="margin-top:12px"><button class="danger" onclick="confirmDelete(${code})">حذف</button><button class="sec" onclick="closeModal()">إلغاء</button></div>`);
+window.confirmDelete=async code=>{const b=BK.find(x=>x.code===code);closeModal();if(!b)return;const dRef=db.doc('days/'+b.clinicId+'_'+b.date);
+  await db.runTransaction(async tx=>{const d=await tx.get(dRef);if(d.exists)tx.update(dRef,{active:d.data().active.filter(x=>x!==b.queue)});
+    tx.delete(db.doc('bookings/'+code));tx.delete(db.doc('track/'+code));});};
+window.editBooking=code=>{const b=BK.find(x=>x.code===code);if(!b)return;
+  openModal(`<h3>تعديل بيانات الحجز</h3><label>الاسم</label><input id="mN" value="${b.name}"><label>رقم التليفون</label><input id="mP" value="${localPhone(b.phone)}">
+   <div class="actions"><button onclick="saveEdit(${code})">حفظ</button><button class="sec" onclick="closeModal()">إلغاء</button></div>`);};
+window.saveEdit=async code=>{const b=BK.find(x=>x.code===code);if(!b)return;const name=$('mN').value.trim()||b.name,raw=$('mP').value.trim();const phone=raw?normPhone(raw):b.phone;closeModal();
+  await db.doc('bookings/'+code).update({name,phone});
+  if(phone!==b.phone)await db.doc('phones/'+phone).set({codes:firebase.firestore.FieldValue.arrayUnion(code)},{merge:true});};
+window.rebook=code=>{const b=BK.find(x=>x.code===code);if(!b)return;const ds=dates(b.clinicId,10,true);
+  openModal(`<h3>حجز معاد متابعة لـ ${b.name}</h3><label>اختار الميعاد</label><select id="mD">${opts(ds.map(d=>[d,dateLabel(d)]),ds[0])}</select>
+   <div class="actions"><button onclick="confirmRebook(${code})">تأكيد الحجز</button><button class="sec" onclick="closeModal()">إلغاء</button></div>`);};
+window.confirmRebook=async code=>{const b=BK.find(x=>x.code===code);if(!b)return;const d=$('mD').value;
+  try{const n=await createBooking(b.clinicId,d,b.name,localPhone(b.phone));
+    openModal(`<div style="text-align:center"><div class="muted">اتحجز معاد المتابعة — ${dateLabel(n.date)}</div><div class="big">رقم ${n.queue}</div><div>كود: <b>${n.code}</b></div>
+    <div class="actions" style="justify-content:center"><a class="btn small ok" href="${waLink(n.phone,waText(n))}" target="_blank">واتساب</a><button class="small sec" onclick="closeModal()">تمام</button></div></div>`);
+  }catch(e){closeModal();}};
+
+// ---------- auth gate (staff) ----------
+let unsub=null;
+function startStaff(){
+  db.doc('meta/codes').get().then(s=>{if(!s.exists)s.ref.set({next:150});}).catch(()=>{});
+  db.doc('config/main').get().then(s=>{if(!s.exists)saveCfg();}).catch(()=>{});
+  const y=new Date();y.setDate(y.getDate()-1);
+  unsub=db.collection('bookings').where('date','>=',fmt(y)).onSnapshot(qs=>{BK=qs.docs.map(d=>d.data());renderVw();renderDoc();},e=>{$('gate').innerHTML='<div class="notice">مفيش صلاحية قراءة — تأكدي من الـ Rules</div>';});
+}
+function loginForm(msg){$('gate').innerHTML=`<div class="card"><h3>🔐 دخول العيادة</h3><label>الإيميل</label><input id="lE" type="email"><label>الباسورد</label><input id="lP" type="password">
+  <button id="lB">دخول</button>${msg?`<div class="notice">${msg}</div>`:''}</div>`;
+  $('lB').onclick=()=>auth.signInWithEmailAndPassword($('lE').value.trim(),$('lP').value).catch(()=>loginForm('الإيميل أو الباسورد غلط'));}
+if(ADMIN){
+  $('title').textContent='🗓️ لوحة العيادة';
+  auth.onAuthStateChanged(u=>{
+    if(u){$('gate').innerHTML=`<div class="muted" style="text-align:left"><button class="small sec" onclick="auth.signOut()">تسجيل خروج</button></div>`;$('app').style.display='block';showTab('sec');renderAll();startStaff();}
+    else{if(unsub){unsub();unsub=null;}BK=[];$('app').style.display='none';loginForm();}
+  });
+}else{
+  $('app').style.display='block';renderTrack();renderBook();showTab('book');
+  const c=new URLSearchParams(location.search).get('code');if(c)goTrack(c);
+}
+</script>
+</body>
+</html>
