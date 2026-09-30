@@ -216,11 +216,63 @@ function renderSet(){const op=[...document.querySelectorAll('#setBox details')].
    <div class="notice">تغيير الأيام بيظهر للمرضى فورًا</div></div></details>
    <details class="card"><summary>✈️ أيام مقفولة (سفر)</summary><div style="margin-top:10px">
    <div class="row"><div><label>اختار يوم تقفله</label><input id="cd" type="date"></div><div style="align-self:flex-end"><button id="cdBtn" class="sec">قفل اليوم ده</button></div></div>
-   <div class="closedlist">${CFG.closedDates.length?[...CFG.closedDates].sort().map(d=>`<span>${dateLabel(d)} <button class="small danger" onclick="openDate('${d}')" style="padding:1px 7px">×</button></span>`).join(''):'<span class="muted">مفيش أيام مقفولة</span>'}</div></div></details>`;
+   <div class="closedlist">${CFG.closedDates.length?[...CFG.closedDates].sort().map(d=>`<span>${dateLabel(d)} <button class="small danger" onclick="openDate('${d}')" style="padding:1px 7px">×</button></span>`).join(''):'<span class="muted">مفيش أيام مقفولة</span>'}</div></div></details>
+   <details class="card"><summary>📥 استيراد حجوزات من جوجل شيت</summary><div style="margin-top:10px" id="impBody">
+   <div class="notice">جوجل شيت ← File ← Share ← Publish to web ← اختاري الشيت واختاري CSV ← انسخي اللينك.
+   الأعمدة المطلوبة بالترتيب: الاسم، التليفون، العيادة (اكتبي طوخ أو بركة)، التاريخ (مثال 2026-10-05)، وعمود اختياري خامس اكتبي فيه "تم" لو الكشف خلص.
+   أول سطر (العناوين) هيتجاهل تلقائي.</div>
+   <label>لينك الـ CSV</label><input id="impUrl" placeholder="https://docs.google.com/.../pub?output=csv">
+   <button id="impFetch" class="sec">اقرأ البيانات</button>
+   <div id="impPreview"></div>
+   </div></details>`;
   document.querySelectorAll('#setBox details').forEach((d,i)=>d.open=!!op[i]);
   document.querySelectorAll('#setBox input[type=checkbox]').forEach(cb=>cb.onchange=()=>{const c=cb.dataset.c,d=+cb.dataset.d;let a=CFG.clinicDays[c]||[];
     CFG.clinicDays[c]=cb.checked?[...new Set([...a,d])]:a.filter(x=>x!==d);saveCfg();});
+  $('impFetch').onclick=fetchImportPreview;
   $('cdBtn').onclick=()=>{const v=$('cd').value;if(!v)return;if(!CFG.closedDates.includes(v))CFG.closedDates=[...CFG.closedDates,v];saveCfg();};}
+
+// ---------- import from Google Sheet CSV ----------
+function parseCSV(text){
+  return text.split(/\r?\n/).filter(l=>l.trim()!=='').map(line=>{
+    const out=[];let cur='',q=false;
+    for(let i=0;i<line.length;i++){const c=line[i];
+      if(c==='"'){if(q&&line[i+1]==='"'){cur+='"';i++;}else q=!q;}
+      else if(c===','&&!q){out.push(cur);cur='';}
+      else cur+=c;}
+    out.push(cur);return out.map(s=>s.trim());
+  });
+}
+function clinicFromText(t){t=(t||'').trim();if(t.includes('طوخ'))return 'toukh';if(t.includes('برك'))return 'baraka';return null;}
+function parseDateFlexible(t){t=(t||'').trim();
+  let m=t.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/); if(m)return `${m[1]}-${m[2].padStart(2,'0')}-${m[3].padStart(2,'0')}`;
+  m=t.match(/^(\d{1,2})[\/-](\d{1,2})[\/-](\d{4})$/); if(m)return `${m[3]}-${m[2].padStart(2,'0')}-${m[1].padStart(2,'0')}`;
+  return null;}
+let IMPORT_ROWS=[];
+async function fetchImportPreview(){
+  const url=$('impUrl').value.trim(); if(!url)return;
+  $('impPreview').innerHTML='<div class="muted">بتقرا البيانات...</div>';
+  let text; try{text=await (await fetch(url)).text();}catch(e){$('impPreview').innerHTML='<div class="notice">فشل تحميل اللينك — تأكدي إنه لينك CSV عام (Publish to web)</div>';return;}
+  const rows=parseCSV(text).slice(1); // skip header
+  const ok=[],bad=[];
+  rows.forEach((r,i)=>{const [name,phone,clinicTxt,dateTxt,status]=r;
+    const clinicId=clinicFromText(clinicTxt),date=parseDateFlexible(dateTxt),ph=(phone||'').replace(/\D/g,'');
+    if(name&&ph.length>=10&&clinicId&&date) ok.push({name:name.trim(),phone:ph,clinicId,date,done:/تم|خلص|done/i.test(status||'')});
+    else bad.push(i+2);});
+  IMPORT_ROWS=ok;
+  $('impPreview').innerHTML=`<div class="notice">لقيت ${ok.length} حجز صالح للاستيراد${bad.length?` — تجاهلت ${bad.length} سطر فيه بيانات ناقصة أو غلط (أسطر: ${bad.join(', ')})`:''}</div>
+    ${ok.length?`<button id="impGo">استورد ${ok.length} حجز دلوقتي</button><div id="impProgress"></div>`:''}`;
+  if(ok.length)$('impGo').onclick=runImport;
+}
+async function runImport(){
+  $('impGo').disabled=true;let done=0,fail=0;
+  for(const r of IMPORT_ROWS){
+    $('impProgress').innerHTML=`<div class="muted">جاري الاستيراد: ${done+fail+1} من ${IMPORT_ROWS.length}</div>`;
+    try{const b=await createBooking(r.clinicId,r.date,r.name,r.phone); if(r.done)await toggleDone(b.code); done++;}
+    catch(e){fail++;}
+  }
+  $('impProgress').innerHTML=`<div class="notice">تم استيراد ${done} حجز${fail?` — فشل ${fail}`:''} ✅</div>`;
+  IMPORT_ROWS=[];
+}
 window.openDate=d=>{CFG.closedDates=CFG.closedDates.filter(x=>x!==d);saveCfg();};
 function renderDoc(){const ds=dates(drClinic,10,false);if(!ds.includes(drDate))drDate=ds[0];const [a,dn]=dayLists(drClinic,drDate);
   $('doc').innerHTML=`<div class="card"><div class="row"><div><label>العيادة</label><select id="drC">${opts(clinicPairs(),drClinic)}</select></div>
